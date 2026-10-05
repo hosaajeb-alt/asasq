@@ -12,6 +12,7 @@
   "email": "Email",
   "password": "Password",
   "dashboard": "Dashboard",
+  "collections": "Collections",
   "datasets": "Datasets",
   "entities": "Entities",
   "graph": "Graph",

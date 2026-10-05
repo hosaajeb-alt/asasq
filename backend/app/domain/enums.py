@@ -103,6 +103,45 @@ class DuplicateLevel(str, Enum):
     ENTITY = "entity"
 
 
+class CollectionStatus(str, Enum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    ARCHIVED = "archived"
+    DELETED = "deleted"
+
+
+class CollectionVisibility(str, Enum):
+    PRIVATE = "private"
+    TEAM = "team"
+    WORKSPACE = "workspace"
+    RESTRICTED = "restricted"
+
+
+COLLECTION_PERMS = (
+    "view",
+    "search",
+    "create",
+    "import",
+    "edit",
+    "delete",
+    "export",
+    "manage",
+    "admin",
+)
+
+
+DEFAULT_INDEX_POLICY = {
+    "text_search": True,
+    "metadata_search": True,
+    "vector_search": False,
+    "face_search": False,
+    "graph_index": True,
+    "fuzzy_search": True,
+    "phonetic_search": True,
+}
+
+
 BUILTIN_SEMANTIC_TYPES = [
     "PersonName",
     "OrganizationName",

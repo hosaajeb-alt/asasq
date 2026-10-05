@@ -7,11 +7,13 @@ import enDatasets from "../../i18n/en/datasets.json";
 import enSearch from "../../i18n/en/search.json";
 import enEntities from "../../i18n/en/entities.json";
 import enInvestigations from "../../i18n/en/investigations.json";
+import enCollections from "../../i18n/en/collections.json";
 import faCommon from "../../i18n/fa/common.json";
 import faDatasets from "../../i18n/fa/datasets.json";
 import faSearch from "../../i18n/fa/search.json";
 import faEntities from "../../i18n/fa/entities.json";
 import faInvestigations from "../../i18n/fa/investigations.json";
+import faCollections from "../../i18n/fa/collections.json";
 
 export type Locale = "en" | "fa";
 
@@ -22,6 +24,7 @@ const catalogs: Record<Locale, Record<string, any>> = {
     search: enSearch,
     entities: enEntities,
     investigations: enInvestigations,
+    collections: enCollections,
   },
   fa: {
     common: faCommon,
@@ -29,6 +32,7 @@ const catalogs: Record<Locale, Record<string, any>> = {
     search: faSearch,
     entities: faEntities,
     investigations: faInvestigations,
+    collections: faCollections,
   },
 };
 

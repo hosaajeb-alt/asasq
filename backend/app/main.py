@@ -84,7 +84,7 @@ app.include_router(api_router, prefix=settings.api_prefix)
 def dashboard():
     from sqlalchemy import func
 
-    from app.domain.models import AuditLog, Dataset, Entity, ImportJob, Investigation, Record, Relationship
+    from app.domain.models import AuditLog, Collection, Dataset, Entity, ImportJob, Investigation, Record, Relationship
 
     db = get_session_factory()()
     try:
@@ -100,6 +100,7 @@ def dashboard():
         jobs = db.query(ImportJob).order_by(ImportJob.created_at.desc()).limit(5).all()
         return {
             "kpis": {
+                "collections": db.query(func.count(Collection.id)).filter(Collection.status != "deleted").scalar() or 0,
                 "datasets": db.query(func.count(Dataset.id)).scalar() or 0,
                 "records": db.query(func.count(Record.id)).scalar() or 0,
                 "entities": db.query(func.count(Entity.id)).scalar() or 0,
@@ -126,7 +127,18 @@ def dashboard():
                 }
                 for a in recent_audit
             ],
-            "scale_note": "Phase 1 metadata+bounded records in PostgreSQL. Target architecture supports 10B+ via object store, ClickHouse, OpenSearch.",
+            "collections": [
+                {
+                    "id": str(c.id),
+                    "name": c.name,
+                    "slug": c.slug,
+                    "record_count": c.record_count,
+                    "dataset_count": c.dataset_count,
+                    "status": c.status,
+                }
+                for c in db.query(Collection).filter(Collection.status != "deleted").order_by(Collection.name).all()
+            ],
+            "scale_note": "Phase 1 metadata+bounded records in PostgreSQL. Target architecture supports 10B+ via object store, ClickHouse, OpenSearch. Collections are the partitioning dimension.",
         }
     finally:
         db.close()

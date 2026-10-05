@@ -38,8 +38,9 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="panel" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)" }}>
+      <div className="panel" style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)" }}>
         {[
+          [t("collections"), k.collections],
           [t("datasets"), k.datasets],
           [t("records"), k.records],
           [t("entities"), k.entities],
@@ -52,6 +53,19 @@ export default function Dashboard() {
           </div>
         ))}
       </div>
+
+      {(data?.collections || []).length > 0 && (
+        <div className="panel">
+          <div className="panel-h"><span className="kicker">{t("collections")}</span></div>
+          <div className="panel-b" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {data.collections.map((c: any) => (
+              <Link key={c.id} className="badge badge-cyan" href={`/collections/${c.id}`}>
+                {c.name} · {fmtNum(c.record_count, locale)}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 16 }}>
         <div className="panel">

@@ -28,8 +28,8 @@ def user_out(u) -> dict:
     }
 
 
-def dataset_out(d) -> dict:
-    return {
+def dataset_out(d, extra: dict | None = None) -> dict:
+    data = {
         "id": str(d.id),
         "slug": d.slug,
         "name": d.name,
@@ -52,9 +52,13 @@ def dataset_out(d) -> dict:
         "provenance": d.provenance or {},
         "owner_id": str(d.owner_id) if d.owner_id else None,
         "team_id": str(d.team_id) if d.team_id else None,
+        "collection_id": str(d.collection_id) if getattr(d, "collection_id", None) else None,
         "created_at": _v(d.created_at),
         "updated_at": _v(d.updated_at),
     }
+    if extra:
+        data.update(extra)
+    return data
 
 
 def entity_out(e, extra: dict | None = None) -> dict:
@@ -85,6 +89,7 @@ def investigation_out(c) -> dict:
         "owner_id": str(c.owner_id) if c.owner_id else None,
         "team_id": str(c.team_id) if c.team_id else None,
         "tags": c.tags or [],
+        "collection_ids": c.collection_ids or [],
         "created_at": _v(c.created_at),
         "updated_at": _v(c.updated_at),
     }
@@ -94,6 +99,7 @@ def job_out(j) -> dict:
     return {
         "id": str(j.id),
         "dataset_id": str(j.dataset_id) if j.dataset_id else None,
+        "collection_id": str(j.collection_id) if getattr(j, "collection_id", None) else None,
         "filename": j.filename,
         "content_type": j.content_type,
         "byte_size": j.byte_size,

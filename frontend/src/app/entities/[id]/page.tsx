@@ -35,6 +35,15 @@ export default function EntityProfile() {
               <span key={i} className="badge">{a.alias} <span className="faint">{a.source}</span></span>
             ))}
           </div>
+          {(e.collections || []).length > 0 && (
+            <div className="chip-row" style={{ marginTop: 8 }}>
+              {(e.collections || []).map((c: any) => (
+                <Link key={c.id} className="badge badge-cyan" href={`/collections/${c.id}`}>
+                  {t("collections.observedIn")}: {c.name}
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
         <div style={{ textAlign: "end" }}>
           <div className="mono" style={{ fontSize: 28 }}>{Math.round(e.confidence * 100)}</div>

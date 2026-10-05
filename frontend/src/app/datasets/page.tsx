@@ -39,6 +39,7 @@ export default function DatasetsPage() {
           <thead>
             <tr>
               <th>{t("name")}</th>
+              <th>{t("collections.title")}</th>
               <th>{t("category")}</th>
               <th>{t("source")}</th>
               <th>{t("languages")}</th>
@@ -54,6 +55,13 @@ export default function DatasetsPage() {
                 <td>
                   <Link className="linkish" href={`/datasets/${d.id}`}>{d.name}</Link>
                   <div className="faint" style={{ maxWidth: 360 }}>{d.description}</div>
+                </td>
+                <td>
+                  {d.collection_id ? (
+                    <Link className="linkish" href={`/collections/${d.collection_id}`}>{d.collection_name || d.collection_id}</Link>
+                  ) : (
+                    <span className="faint">—</span>
+                  )}
                 </td>
                 <td><span className="badge">{d.category}</span></td>
                 <td className="muted">{d.source}</td>

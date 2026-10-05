@@ -18,7 +18,8 @@ from app.application.ingest import commit_import
 from app.application.parsers import sample_columns, sniff_kind
 from app.application.serializers import dataset_out, job_out
 from app.core.config import get_settings
-from app.domain.models import Dataset, DatasetField, DatasetVersion, ImportJob, User
+from app.collections.scope import require_collection
+from app.domain.models import Collection, Dataset, DatasetField, DatasetVersion, ImportJob, User
 from app.infrastructure.db import get_db
 from app.profiling.profiler import DataProfiler
 from app.schema_detection.detector import SchemaDetector
@@ -50,6 +51,11 @@ class MetaIn(BaseModel):
     legal_classification: str = "internal"
     tags: list[str] = []
     notes: str = ""
+    collection_id: Optional[str] = None
+
+
+class CollectionBindIn(BaseModel):
+    collection_id: str
 
 
 class MapIn(BaseModel):
@@ -131,6 +137,28 @@ def set_meta(job_id: UUID, body: MetaIn, db: Session = Depends(get_db), user: Us
     state["meta"] = body.model_dump(mode="json")
     job.wizard_state = state
     job.step = max(job.step, 2)
+    if body.collection_id:
+        cid = UUID(body.collection_id)
+        require_collection(db, user, cid, "import")
+        job.collection_id = cid
+        state["collection_id"] = body.collection_id
+        job.wizard_state = state
+    db.commit()
+    db.refresh(job)
+    return job_out(job)
+
+
+@router.post("/{job_id}/collection")
+def bind_collection(job_id: UUID, body: CollectionBindIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    job = db.get(ImportJob, job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    cid = UUID(body.collection_id)
+    require_collection(db, user, cid, "import")
+    job.collection_id = cid
+    state = dict(job.wizard_state or {})
+    state["collection_id"] = body.collection_id
+    job.wizard_state = state
     db.commit()
     db.refresh(job)
     return job_out(job)
@@ -232,6 +260,10 @@ def commit_job(job_id: UUID, db: Session = Depends(get_db), user: User = Depends
     schema_fields = state.get("mapped_fields") or state.get("detected_schema") or []
     if not schema_fields:
         raise HTTPException(400, "schema mapping required")
+    collection_id = job.collection_id or (UUID(state["collection_id"]) if state.get("collection_id") else None)
+    if not collection_id:
+        raise HTTPException(400, "collection context required — select or create a collection before import")
+    col = require_collection(db, user, collection_id, "import")
 
     job.status = "processing"
     job.started_at = datetime.now(timezone.utc)
@@ -268,6 +300,7 @@ def commit_job(job_id: UUID, db: Session = Depends(get_db), user: User = Depends
             "importer_id": str(user.id),
         },
         owner_id=user.id,
+        collection_id=collection_id,
     )
     db.add(ds)
     db.flush()
@@ -306,15 +339,28 @@ def commit_job(job_id: UUID, db: Session = Depends(get_db), user: User = Depends
         schema_fields=schema_fields,
         language_hint=lang_hint,
         entity_mappings=state.get("entity_mappings") or {},
+        collection_id=collection_id,
+        normalization_policy=col.normalization_policy or {},
     )
     job.dataset_id = ds.id
+    job.collection_id = collection_id
+    col.dataset_count = (col.dataset_count or 0) + 1
     job.status = "completed"
     job.finished_at = datetime.now(timezone.utc)
     job.records_processed = stats["records_processed"]
     job.invalid_count = stats["invalid_count"]
     job.duplicate_count = stats["duplicate_count"]
     job.total_records = stats["records_processed"]
-    write_audit(db, actor_id=user.id, action="dataset_import", resource_type="dataset", resource_id=str(ds.id), payload=stats)
+    write_audit(
+        db,
+        actor_id=user.id,
+        action="dataset_imported",
+        resource_type="dataset",
+        resource_id=str(ds.id),
+        payload=stats,
+        collection_id=collection_id,
+        dataset_id=ds.id,
+    )
     db.commit()
     db.refresh(ds)
     db.refresh(job)

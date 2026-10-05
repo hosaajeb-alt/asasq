@@ -12,13 +12,17 @@ export default function EntitiesPage() {
   const [type, setType] = useState("");
   const [data, setData] = useState<any>(null);
   const [props, setProps] = useState<any>(null);
+  const [collections, setCollections] = useState<any[]>([]);
+  const [collectionId, setCollectionId] = useState("");
 
   async function load() {
-    const r = await api(`/entities?q=${encodeURIComponent(q)}&entity_type=${encodeURIComponent(type)}&page_size=50`);
+    const col = collectionId ? `&collection_id=${encodeURIComponent(collectionId)}` : "";
+    const r = await api(`/entities?q=${encodeURIComponent(q)}&entity_type=${encodeURIComponent(type)}&page_size=50${col}`);
     setData(r);
   }
   useEffect(() => {
     load().catch(() => {});
+    api("/collections?page_size=100").then((r) => setCollections(r.items || [])).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -41,6 +45,12 @@ export default function EntitiesPage() {
         <select className="select" style={{ maxWidth: 180 }} value={type} onChange={(e) => setType(e.target.value)}>
           <option value="">{t("all")}</option>
           {["person", "organization", "domain", "email", "document"].map((x) => <option key={x} value={x}>{t(x)}</option>)}
+        </select>
+        <select className="select" style={{ maxWidth: 220 }} value={collectionId} onChange={(e) => setCollectionId(e.target.value)}>
+          <option value="">{t("collections.allCollections")}</option>
+          {collections.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
         </select>
         <button className="btn btn-primary">{t("filter")}</button>
       </form>

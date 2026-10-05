@@ -2,19 +2,25 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.application.audit import write_audit
-from app.domain.models import Dataset, Entity, Record, SearchDoc, User
+from app.collections.scope import resolve_collection_ids
+from app.domain.models import Collection, Dataset, Entity, Record, SearchDoc, User
 from app.infrastructure.db import get_db
 from app.normalization.engine import NormalizationEngine
 from app.search.ranking import MatchSignals, RANKING_PRESETS, rank_score
 
 router = APIRouter(prefix="/search", tags=["search"])
+
+
+class SearchScope(BaseModel):
+    collections: list[str] = ["*"]
+    datasets: list[str] = []
 
 
 class SearchIn(BaseModel):
@@ -26,6 +32,9 @@ class SearchIn(BaseModel):
     semantic_type: Optional[str] = None
     page: int = 1
     page_size: int = 25
+    scope: Optional[SearchScope] = None
+    collections: Optional[list[str]] = None  # shorthand for scope.collections
+    search_type: Optional[str] = None  # all | text | entity | image | face
 
 
 def _signals(q_env, doc: SearchDoc, mode: str) -> MatchSignals:
@@ -96,9 +105,22 @@ def search(
             terms.add(t.strip())
     terms = {t for t in terms if t}
 
-    query = db.query(SearchDoc)
+    requested = None
+    if body.scope and body.scope.collections:
+        requested = body.scope.collections
+    elif body.collections:
+        requested = body.collections
+    scoped_ids = resolve_collection_ids(db, user, requested, permission="search")
+    if not scoped_ids:
+        return {"total": 0, "items": [], "expanded": expanded, "mode": body.mode, "scope": {"collections": []}}
+
+    # Collection routing happens before any term match — never global-then-filter.
+    query = db.query(SearchDoc).filter(SearchDoc.collection_id.in_(scoped_ids))
+    extra_datasets = (body.scope.datasets if body.scope else None) or []
     if body.dataset_id:
-        query = query.filter(SearchDoc.dataset_id == body.dataset_id)
+        extra_datasets = list(extra_datasets) + [body.dataset_id]
+    if extra_datasets:
+        query = query.filter(SearchDoc.dataset_id.in_(extra_datasets))
     if body.entity_type:
         query = query.filter(SearchDoc.entity_type == body.entity_type)
     if body.language:
@@ -127,6 +149,7 @@ def search(
     ds_cache: dict = {}
     rec_cache: dict = {}
     ent_cache: dict = {}
+    col_cache: dict = {}
 
     for doc in docs:
         sig = _signals(env, doc, mode)
@@ -158,11 +181,19 @@ def search(
                 ent = db.get(Entity, doc.entity_id)
                 ent_cache[doc.entity_id] = ent
         match_type = why[0] if why else "partial"
+        col = None
+        if doc.collection_id:
+            col = col_cache.get(doc.collection_id)
+            if col is None:
+                col = db.get(Collection, doc.collection_id)
+                col_cache[doc.collection_id] = col
         best[rid] = {
             "record_id": rid,
             "entity_id": str(doc.entity_id) if doc.entity_id else None,
             "entity_name": ent.canonical_name if ent else (doc.original_text or ""),
             "entity_type": (ent.entity_type if ent else doc.entity_type) or "",
+            "collection_id": str(doc.collection_id) if doc.collection_id else None,
+            "collection_name": col.name if col else "",
             "dataset_id": str(doc.dataset_id),
             "dataset_name": ds.name if ds else "",
             "field_name": doc.field_name,
@@ -194,7 +225,7 @@ def search(
         actor_id=user.id,
         action="search",
         resource_type="search",
-        payload={"q": q, "mode": mode, "hits": total},
+        payload={"mode": mode, "hits": total, "collections": [str(i) for i in scoped_ids]},
         ip=request.client.host if request.client else "",
     )
     db.commit()
@@ -205,18 +236,28 @@ def search(
         "mode": mode,
         "weights": {k: v for k, v in RANKING_PRESETS[mode].items() if k != "fuzzy_cutoff"},
         "expanded": expanded,
+        "scope": {"collections": [str(i) for i in scoped_ids]},
         "items": page_items,
     }
 
 
 @router.get("/suggest")
-def suggest(q: str = Query(""), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def suggest(
+    q: str = Query(""),
+    collection_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     q = q.strip()
     if len(q) < 2:
+        return {"items": []}
+    scoped = resolve_collection_ids(db, user, [collection_id] if collection_id else ["*"], permission="search")
+    if not scoped:
         return {"items": []}
     like = f"{q}%"
     docs = (
         db.query(SearchDoc)
+        .filter(SearchDoc.collection_id.in_(scoped))
         .filter(
             or_(
                 SearchDoc.original_text.ilike(like),
@@ -243,3 +284,50 @@ def suggest(q: str = Query(""), db: Session = Depends(get_db), user: User = Depe
             }
         )
     return {"items": items}
+
+
+@router.post("/face")
+async def face_search(
+    request: Request,
+    file: UploadFile = File(...),
+    collections: Optional[str] = Query(None, description="comma-separated collection ids or *"),
+    top_k: int = 20,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Multi-collection face search. Routes only to requested, authorized collections."""
+    from app.domain.models import Collection as Col
+    from app.vector.face import run_pipeline
+    from app.vector.store import get_face_store
+
+    requested = [c.strip() for c in (collections or "*").split(",") if c.strip()]
+    scoped = resolve_collection_ids(db, user, requested, permission="search")
+    if not scoped:
+        return {"total": 0, "items": [], "identity_asserted": False}
+    raw = await file.read()
+    pipe = run_pipeline(raw)
+    hits = get_face_store(db).search(pipe["vector"], scoped, top_k=top_k, min_score=0.15)
+    for h in hits:
+        if h.get("entity_id"):
+            ent = db.get(Entity, h["entity_id"])
+            h["entity_name"] = ent.canonical_name if ent else None
+        if h.get("collection_id"):
+            col = db.get(Col, h["collection_id"])
+            h["collection_name"] = col.name if col else None
+    write_audit(
+        db,
+        actor_id=user.id,
+        action="face_search_executed",
+        resource_type="search",
+        payload={"hits": len(hits), "collections": [str(i) for i in scoped]},
+        ip=request.client.host if request.client else "",
+    )
+    db.commit()
+    return {
+        "pipeline": {k: v for k, v in pipe.items() if k != "vector"},
+        "scope": {"collections": [str(i) for i in scoped]},
+        "identity_asserted": False,
+        "review": "human_required",
+        "total": len(hits),
+        "items": hits,
+    }

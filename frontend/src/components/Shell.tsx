@@ -10,6 +10,7 @@ import {
   Shield,
   FolderLock,
   Database,
+  Layers,
   Settings,
   Languages,
   LogOut,
@@ -25,6 +26,7 @@ import { api } from "@/lib/api";
 
 const NAV = [
   { href: "/", key: "dashboard", icon: LayoutDashboard },
+  { href: "/collections", key: "collections", icon: Layers },
   { href: "/datasets", key: "datasets", icon: Database },
   { href: "/search", key: "search", icon: Search },
   { href: "/entities", key: "entities", icon: Fingerprint },
@@ -70,6 +72,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const commands = useMemo(
     () => [
       { label: t("search"), run: () => router.push("/search") },
+      { label: t("collections"), run: () => router.push("/collections") },
       { label: t("datasets"), run: () => router.push("/datasets") },
       { label: t("newImport"), run: () => router.push("/datasets/import") },
       { label: t("entities"), run: () => router.push("/entities") },

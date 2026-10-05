@@ -20,6 +20,7 @@ class CaseIn(BaseModel):
     summary: str = ""
     classification: str = "internal"
     tags: list[str] = []
+    collection_ids: list[str] = []
 
 
 class ItemIn(BaseModel):
@@ -73,6 +74,7 @@ def create_case(body: CaseIn, db: Session = Depends(get_db), user: User = Depend
         summary=body.summary,
         classification=body.classification,
         tags=body.tags,
+        collection_ids=body.collection_ids,
         owner_id=user.id,
         status="open",
     )

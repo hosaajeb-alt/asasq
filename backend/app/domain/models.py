@@ -68,6 +68,97 @@ class TeamMember(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class Workspace(Base, TimestampMixin):
+    __tablename__ = "workspaces"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    slug: Mapped[str] = mapped_column(String(160), unique=True, nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=True)
+
+
+class Collection(Base, TimestampMixin):
+    __tablename__ = "collections"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    workspace_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    slug: Mapped[str] = mapped_column(String(160), unique=True, nullable=False, index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(300), default="")
+    source_type: Mapped[str] = mapped_column(String(64), default="custom")
+    category: Mapped[str] = mapped_column(String(64), default="custom")
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    visibility: Mapped[str] = mapped_column(String(32), default="team")
+    owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    team_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("teams.id"), nullable=True)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    record_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    entity_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    dataset_count: Mapped[int] = mapped_column(Integer, default=0)
+    image_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    embedding_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    language_distribution: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    country_distribution: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    extra_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    retention_policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    index_policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    dedup_policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    normalization_policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    access_policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    geographic_scope: Mapped[str] = mapped_column(String(200), default="")
+    languages: Mapped[list[str]] = mapped_column(JSON, default=list)
+    legal_classification: Mapped[str] = mapped_column(String(32), default="internal")
+    last_import_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CollectionGrant(Base):
+    __tablename__ = "collection_grants"
+    __table_args__ = (UniqueConstraint("collection_id", "user_id", "permission"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    collection_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("collections.id"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), index=True)
+    permission: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), nullable=True)
+
+
+class CollectionVersion(Base, TimestampMixin):
+    __tablename__ = "collection_versions"
+    __table_args__ = (UniqueConstraint("collection_id", "version_number"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    collection_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("collections.id"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    version_label: Mapped[str] = mapped_column(String(32), nullable=False)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), nullable=True)
+
+
+class CollectionIndex(Base, TimestampMixin):
+    """Logical index catalog — not one physical engine per collection."""
+
+    __tablename__ = "collection_indexes"
+    __table_args__ = (UniqueConstraint("collection_id", "kind"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    collection_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("collections.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # text, metadata, vector, face, entity, graph
+    status: Mapped[str] = mapped_column(String(32), default="healthy")
+    backend: Mapped[str] = mapped_column(String(64), default="projection")
+    alias: Mapped[str] = mapped_column(String(200), default="")
+    document_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    last_rebuild_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class SemanticType(Base, TimestampMixin):
     __tablename__ = "semantic_types"
 
@@ -109,6 +200,9 @@ class Dataset(Base, TimestampMixin):
     provenance: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=True)
     team_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("teams.id"), nullable=True)
+    collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("collections.id"), nullable=True, index=True
+    )
 
     versions: Mapped[list["DatasetVersion"]] = relationship(back_populates="dataset")
 
@@ -170,6 +264,9 @@ class ImportJob(Base, TimestampMixin):
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str] = mapped_column(Text, default="")
     wizard_state: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("collections.id"), nullable=True, index=True
+    )
 
 
 class Record(Base):
@@ -190,6 +287,12 @@ class Record(Base):
     duplicate_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     duplicate_reason: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("collections.id"), nullable=True, index=True
+    )
+    duplicate_method: Mapped[str] = mapped_column(String(64), default="")
+    duplicate_scope: Mapped[str] = mapped_column(String(32), default="")
+    duplicate_review_status: Mapped[str] = mapped_column(String(32), default="")
 
 
 class RecordValue(Base):
@@ -214,6 +317,9 @@ class RecordValue(Base):
     script: Mapped[str] = mapped_column(String(32), default="")
     is_valid: Mapped[bool] = mapped_column(Boolean, default=True)
     block_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
+    collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("collections.id"), nullable=True, index=True
+    )
 
 
 class Entity(Base, TimestampMixin):
@@ -241,6 +347,9 @@ class EntityAttribute(Base):
     origin: Mapped[str] = mapped_column(String(32), default="observed")
     record_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("records.id"), nullable=True)
     dataset_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("datasets.id"), nullable=True)
+    collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("collections.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -262,6 +371,9 @@ class EntityRecordLink(Base):
     entity_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id"), index=True)
     record_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("records.id"), index=True)
     dataset_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("datasets.id"))
+    collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("collections.id"), nullable=True, index=True
+    )
     match_confidence: Mapped[float] = mapped_column(Float, default=1.0)
     explain_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -281,6 +393,28 @@ class Relationship(Base, TimestampMixin):
     discovered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
+    source_collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("collections.id"), nullable=True, index=True
+    )
+    source_dataset_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    source_record_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    derivation_method: Mapped[str] = mapped_column(String(64), default="")
+    observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EntityCollectionLink(Base):
+    """An entity may be observed in many collections without changing ownership of records."""
+
+    __tablename__ = "entity_collection_links"
+    __table_args__ = (UniqueConstraint("entity_id", "collection_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    entity_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id"), index=True)
+    collection_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("collections.id"), index=True)
+    dataset_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    origin: Mapped[str] = mapped_column(String(32), default="observed")
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Investigation(Base, TimestampMixin):
@@ -294,6 +428,7 @@ class Investigation(Base, TimestampMixin):
     owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"))
     team_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("teams.id"))
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    collection_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
 class InvestigationItem(Base):
@@ -333,6 +468,9 @@ class Evidence(Base, TimestampMixin):
     notes: Mapped[str] = mapped_column(Text, default="")
     origin: Mapped[str] = mapped_column(String(32), default="observed")
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"))
+    collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("collections.id"), nullable=True, index=True
+    )
 
 
 class TimelineEvent(Base):
@@ -390,6 +528,11 @@ class AuditLog(Base):
     user_agent: Mapped[str] = mapped_column(String(400), default="")
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    workspace_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), index=True, nullable=True)
+    dataset_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    request_id: Mapped[str] = mapped_column(String(64), default="")
+    result_summary: Mapped[str] = mapped_column(String(400), default="")
 
 
 class SearchDoc(Base):
@@ -404,6 +547,9 @@ class SearchDoc(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
     dataset_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("datasets.id"))
+    collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("collections.id"), nullable=True, index=True
+    )
     record_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("records.id"), index=True)
     entity_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id"), nullable=True)
     entity_type: Mapped[str] = mapped_column(String(32), default="")
@@ -418,3 +564,55 @@ class SearchDoc(Base):
     script: Mapped[str] = mapped_column(String(32), default="")
     source_confidence: Mapped[float] = mapped_column(Float, default=1.0)
     classification: Mapped[str] = mapped_column(String(32), default="internal")
+
+
+class ImageAsset(Base, TimestampMixin):
+    __tablename__ = "image_assets"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    collection_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("collections.id"), index=True)
+    dataset_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("datasets.id"), nullable=True)
+    record_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("records.id"), nullable=True)
+    entity_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id"), nullable=True)
+    uri: Mapped[str] = mapped_column(String(600), default="")
+    content_type: Mapped[str] = mapped_column(String(80), default="image/png")
+    width: Mapped[int] = mapped_column(Integer, default=0)
+    height: Mapped[int] = mapped_column(Integer, default=0)
+    checksum: Mapped[str] = mapped_column(String(128), default="")
+    quality: Mapped[float] = mapped_column(Float, default=0.0)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class FaceEmbedding(Base, TimestampMixin):
+    """Derived face vector. Never the source of truth; never proof of identity."""
+
+    __tablename__ = "face_embeddings"
+    __table_args__ = (Index("ix_face_collection", "collection_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    collection_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("collections.id"), index=True)
+    dataset_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    image_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), ForeignKey("image_assets.id"), nullable=True)
+    record_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    entity_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    vector: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    dim: Mapped[int] = mapped_column(Integer, default=64)
+    detector: Mapped[str] = mapped_column(String(64), default="phase1-perceptual")
+    quality: Mapped[float] = mapped_column(Float, default=0.0)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class DuplicateCandidate(Base, TimestampMixin):
+    __tablename__ = "duplicate_candidates"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid(as_uuid=True), index=True)
+    scope: Mapped[str] = mapped_column(String(32), default="collection")
+    record_a_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    record_b_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    similarity_score: Mapped[float] = mapped_column(Float, default=0.0)
+    matching_fields: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    matching_method: Mapped[str] = mapped_column(String(64), default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    review_status: Mapped[str] = mapped_column(String(32), default="proposed")
+    explain_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

@@ -8,16 +8,23 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.domain.enums import DEFAULT_INDEX_POLICY
 from app.domain.models import (
     AuditLog,
+    Collection,
+    CollectionIndex,
+    CollectionVersion,
     Dataset,
     DatasetField,
     DatasetVersion,
     Entity,
     EntityAlias,
     EntityAttribute,
+    EntityCollectionLink,
     EntityRecordLink,
     Evidence,
+    FaceEmbedding,
+    ImageAsset,
     ImportJob,
     Investigation,
     InvestigationItem,
@@ -31,7 +38,9 @@ from app.domain.models import (
     TeamMember,
     TimelineEvent,
     User,
+    Workspace,
 )
+from app.vector.face import embed_seed
 from app.normalization.engine import NormalizationEngine
 
 SEMANTIC_REGISTRY = [
@@ -76,11 +85,78 @@ def _ensure_semantics(db: Session) -> None:
         )
 
 
+def _make_collection(
+    db: Session,
+    *,
+    workspace: Workspace,
+    owner: User,
+    team: Team | None,
+    name: str,
+    slug: str,
+    description: str,
+    source: str,
+    source_type: str,
+    category: str,
+    languages: list[str],
+    geographic_scope: str,
+    tags: list[str],
+    index_policy: dict | None = None,
+    normalization_policy: dict | None = None,
+) -> Collection:
+    policy = dict(DEFAULT_INDEX_POLICY)
+    if index_policy:
+        policy.update(index_policy)
+    c = Collection(
+        workspace_id=workspace.id,
+        name=name,
+        slug=slug,
+        description=description,
+        source=source,
+        source_type=source_type,
+        category=category,
+        status="active",
+        visibility="workspace",
+        owner_id=owner.id,
+        created_by=owner.id,
+        team_id=team.id if team else None,
+        languages=languages,
+        geographic_scope=geographic_scope,
+        tags=tags,
+        legal_classification="internal",
+        index_policy=policy,
+        dedup_policy={"scope": "collection", "auto_merge": False},
+        normalization_policy=normalization_policy or {"languages": languages},
+        retention_policy={"mode": "indefinite"},
+        access_policy={"default": "workspace"},
+        provenance={"seed": True},
+    )
+    db.add(c)
+    db.flush()
+    kinds = ["text", "metadata", "entity", "graph"]
+    if policy.get("face_search"):
+        kinds.append("face")
+    if policy.get("vector_search"):
+        kinds.append("vector")
+    for kind in kinds:
+        db.add(
+            CollectionIndex(
+                collection_id=c.id,
+                kind=kind,
+                status="healthy",
+                backend="projection" if kind != "face" else "face-store",
+                alias=f"col-{slug}-{kind}",
+            )
+        )
+    db.add(CollectionVersion(collection_id=c.id, version_number=1, version_label="v1", snapshot={"seed": True}))
+    return c
+
+
 def _ingest_dataset(
     db: Session,
     *,
     owner: User,
     team: Team | None,
+    collection: Collection | None = None,
     slug: str,
     name: str,
     description: str,
@@ -118,6 +194,7 @@ def _ingest_dataset(
         provenance={"filename": f"{slug}.csv", "importer": "seed", "synthetic": True},
         owner_id=owner.id,
         team_id=team.id if team else None,
+        collection_id=collection.id if collection else None,
         data_quality={
             "dataset": name,
             "records": len(rows),
@@ -162,6 +239,7 @@ def _ingest_dataset(
             raw_payload=row,
             language=languages[0] if languages else "",
             content_hash=f"seed-{slug}-{i}",
+            collection_id=collection.id if collection else None,
         )
         db.add(rec)
         db.flush()
@@ -175,6 +253,7 @@ def _ingest_dataset(
                 RecordValue(
                     record_id=rec.id,
                     dataset_id=ds.id,
+                    collection_id=collection.id if collection else None,
                     field_name=n,
                     semantic_type=st,
                     original_value=env.original_value,
@@ -192,6 +271,7 @@ def _ingest_dataset(
                 db.add(
                     SearchDoc(
                         dataset_id=ds.id,
+                        collection_id=collection.id if collection else None,
                         record_id=rec.id,
                         semantic_type=st,
                         field_name=n,
@@ -252,10 +332,30 @@ def _ingest_dataset(
                     entity_id=ent.id,
                     record_id=rec.id,
                     dataset_id=ds.id,
+                    collection_id=collection.id if collection else None,
                     match_confidence=0.88 if not created else 1.0,
                     explain_json={"reason": "canonical name on ingest", "origin": "derived"},
                 )
             )
+            if collection:
+                exists = (
+                    db.query(EntityCollectionLink)
+                    .filter(
+                        EntityCollectionLink.entity_id == ent.id,
+                        EntityCollectionLink.collection_id == collection.id,
+                    )
+                    .first()
+                )
+                if not exists:
+                    db.add(
+                        EntityCollectionLink(
+                            entity_id=ent.id,
+                            collection_id=collection.id,
+                            dataset_id=ds.id,
+                            origin="observed",
+                            confidence=1.0,
+                        )
+                    )
             for n, _p, st in fields:
                 val = row.get(n)
                 if not val:
@@ -269,11 +369,16 @@ def _ingest_dataset(
                         origin="observed",
                         record_id=rec.id,
                         dataset_id=ds.id,
+                        collection_id=collection.id if collection else None,
                     )
                 )
             db.query(SearchDoc).filter(SearchDoc.record_id == rec.id).update(
                 {"entity_id": ent.id, "entity_type": etype}
             )
+    if collection:
+        collection.dataset_count = (collection.dataset_count or 0) + 1
+        collection.record_count = (collection.record_count or 0) + len(rows)
+        collection.last_import_at = now
     return ds
 
 
@@ -321,6 +426,81 @@ def seed(db: Session) -> None:
             TeamMember(team_id=team.id, user_id=analyst.id, role="editor"),
             TeamMember(team_id=team.id, user_id=investigator.id, role="editor"),
         ]
+    )
+
+    workspace = Workspace(
+        name="OSINT",
+        slug="osint",
+        description="Default research workspace. Collections are user-configurable — source names are metadata, not code paths.",
+        owner_id=admin.id,
+    )
+    db.add(workspace)
+    db.flush()
+
+    col_academic = _make_collection(
+        db,
+        workspace=workspace,
+        owner=analyst,
+        team=team,
+        name="Public Academic Research",
+        slug="public-academic-research",
+        description="Authorized academic directory plus synthetic profile-image placeholders for collection-scoped face search.",
+        source="Demo seed — academic open data",
+        source_type="registry",
+        category="people",
+        languages=["fa", "en"],
+        geographic_scope="Iran, Turkey, UAE, Russia, USA",
+        tags=["demo", "academic", "people"],
+        index_policy={"face_search": True, "vector_search": True},
+        normalization_policy={"languages": ["fa", "en"], "modules": ["persian", "english"]},
+    )
+    col_corp = _make_collection(
+        db,
+        workspace=workspace,
+        owner=analyst,
+        team=team,
+        name="Corporate Registry Research",
+        slug="corporate-registry-research",
+        description="Synthetic company-officer extract. Configurable collection — not hard-coded to any registrar.",
+        source="Demo seed — corporate registry",
+        source_type="registry",
+        category="registry",
+        languages=["en", "fa"],
+        geographic_scope="Global",
+        tags=["demo", "corporate"],
+        normalization_policy={"languages": ["en", "fa"]},
+    )
+    col_net = _make_collection(
+        db,
+        workspace=workspace,
+        owner=investigator,
+        team=team,
+        name="Public Network Identifiers",
+        slug="public-network-identifiers",
+        description="Synthetic domain/registrant snapshot for graph linking.",
+        source="Demo seed — domain snapshot",
+        source_type="network",
+        category="network",
+        languages=["en"],
+        geographic_scope="Global",
+        tags=["demo", "domain"],
+        index_policy={"face_search": False, "vector_search": False},
+    )
+    col_news = _make_collection(
+        db,
+        workspace=workspace,
+        owner=investigator,
+        team=team,
+        name="Open News Archive",
+        slug="open-news-archive",
+        description="Synthetic public-style news mentions. Document collection — face search off.",
+        source="Demo seed — open news",
+        source_type="documents",
+        category="documents",
+        languages=["en", "fa"],
+        geographic_scope="Global",
+        tags=["demo", "news"],
+        index_policy={"face_search": False, "vector_search": True},
     )
 
     academic_rows = [
@@ -609,6 +789,7 @@ def seed(db: Session) -> None:
         db,
         owner=analyst,
         team=team,
+        collection=col_academic,
         slug="academic-directory-2025",
         name="Public Academic Directory 2025",
         description="Synthetic directory of researchers used to demonstrate multilingual identity resolution. Not real personal data.",
@@ -636,6 +817,7 @@ def seed(db: Session) -> None:
         db,
         owner=analyst,
         team=team,
+        collection=col_corp,
         slug="corporate-officers-2025",
         name="Corporate Officers Registry Extract",
         description="Synthetic company-officer extract. Names deliberately vary (Rezaei / Rezaee) to exercise ER.",
@@ -662,6 +844,7 @@ def seed(db: Session) -> None:
         db,
         owner=investigator,
         team=team,
+        collection=col_net,
         slug="domain-research-snapshot",
         name="Domain Research Snapshot",
         description="Synthetic domain/registrant snapshot for graph linking. Not WHOIS of real registrants.",
@@ -686,6 +869,7 @@ def seed(db: Session) -> None:
         db,
         owner=investigator,
         team=team,
+        collection=col_news,
         slug="open-news-mentions-q4-2025",
         name="Open News Mentions Q4 2025",
         description="Synthetic public-style news mentions connecting people and organisations.",
@@ -740,7 +924,66 @@ def seed(db: Session) -> None:
         "northwind": ent_by_name("Northwind Holdings"),
     }
 
-    def rel(a, b, typ, origin="observed", conf=0.9, source=""):
+    # Synthetic profile-image placeholders + collection-scoped face embeddings (not real biometrics).
+    img_ds = Dataset(
+        slug="academic-profile-images",
+        name="Profile image placeholders",
+        description="Synthetic image metadata for demonstrating collection-scoped face search. No real photographs.",
+        category="images",
+        source="Demo seed — placeholders",
+        languages=["en", "fa"],
+        geographic_scope="Global",
+        version_label="v1",
+        legal_classification="internal",
+        tags=["demo", "images"],
+        processing_status="ready",
+        owner_id=analyst.id,
+        team_id=team.id,
+        collection_id=col_academic.id,
+        schema_json={"fields": [{"name": "subject", "semantic_type": "PersonName"}]},
+        provenance={"synthetic": True, "no_real_faces": True},
+        record_count=0,
+    )
+    db.add(img_ds)
+    db.flush()
+    col_academic.dataset_count = (col_academic.dataset_count or 0) + 1
+    face_n = 0
+    for key, ent in people.items():
+        if not ent:
+            continue
+        # Related name variants share a seed prefix so they are *candidates*, not identity.
+        family = "rezaei" if key == "mohammad" else key
+        img = ImageAsset(
+            collection_id=col_academic.id,
+            dataset_id=img_ds.id,
+            entity_id=ent.id,
+            uri=f"seed://avatar/{ent.id}",
+            content_type="image/png",
+            quality=0.72,
+            extra={"synthetic": True, "label": ent.canonical_name},
+        )
+        db.add(img)
+        db.flush()
+        vec = embed_seed(f"avatar-family:{family}:{ent.canonical_name}")
+        db.add(
+            FaceEmbedding(
+                collection_id=col_academic.id,
+                dataset_id=img_ds.id,
+                image_id=img.id,
+                entity_id=ent.id,
+                vector=vec,
+                dim=len(vec),
+                detector="phase1-perceptual",
+                quality=0.72,
+                extra={"synthetic": True, "identity_asserted": False},
+            )
+        )
+        face_n += 1
+    col_academic.image_count = face_n
+    col_academic.embedding_count = face_n
+    img_ds.record_count = face_n
+
+    def rel(a, b, typ, origin="observed", conf=0.9, source="", collection=None):
         if not a or not b:
             return
         db.add(
@@ -752,22 +995,24 @@ def seed(db: Session) -> None:
                 confidence=conf,
                 source=source,
                 discovered_at=datetime.now(timezone.utc),
+                source_collection_id=collection.id if collection else None,
+                derivation_method=origin,
             )
         )
 
-    rel(people["mohammad"], orgs["aria"], "affiliated_with", "observed", 0.97, "academic-directory-2025")
-    rel(people["mohammad"], orgs["caspian"], "associated_with", "derived", 0.84, "corporate-officers-2025")
-    rel(people["sara"], orgs["aria"], "affiliated_with", "observed", 0.96, "academic-directory-2025")
-    rel(people["sara"], orgs["nour"], "shareholder_of", "observed", 0.9, "corporate-officers-2025")
-    rel(people["ali"], orgs["nour"], "officer_of", "observed", 0.95, "corporate-officers-2025")
-    rel(people["fatemeh"], orgs["pars"], "officer_of", "observed", 0.98, "corporate-officers-2025")
-    rel(people["yusuf"], orgs["caspian"], "officer_of", "observed", 0.97, "corporate-officers-2025")
-    rel(people["amira"], orgs["caspian"], "officer_of", "observed", 0.94, "corporate-officers-2025")
-    rel(people["john"], orgs["northwind"], "officer_of", "observed", 0.93, "corporate-officers-2025")
-    rel(people["elena"], orgs["northwind"], "officer_of", "observed", 0.93, "corporate-officers-2025")
-    rel(orgs["caspian"], orgs["aria"], "partners_with", "inferred", 0.71, "open-news-mentions-q4-2025")
-    rel(people["mohammad"], people["yusuf"], "associated_with", "inferred", 0.62, "shared Caspian Analytics")
-    rel(people["sara"], people["ali"], "associated_with", "derived", 0.7, "shared Nour Tech")
+    rel(people["mohammad"], orgs["aria"], "affiliated_with", "observed", 0.97, "academic-directory-2025", col_academic)
+    rel(people["mohammad"], orgs["caspian"], "associated_with", "derived", 0.84, "corporate-officers-2025", col_corp)
+    rel(people["sara"], orgs["aria"], "affiliated_with", "observed", 0.96, "academic-directory-2025", col_academic)
+    rel(people["sara"], orgs["nour"], "shareholder_of", "observed", 0.9, "corporate-officers-2025", col_corp)
+    rel(people["ali"], orgs["nour"], "officer_of", "observed", 0.95, "corporate-officers-2025", col_corp)
+    rel(people["fatemeh"], orgs["pars"], "officer_of", "observed", 0.98, "corporate-officers-2025", col_corp)
+    rel(people["yusuf"], orgs["caspian"], "officer_of", "observed", 0.97, "corporate-officers-2025", col_corp)
+    rel(people["amira"], orgs["caspian"], "officer_of", "observed", 0.94, "corporate-officers-2025", col_corp)
+    rel(people["john"], orgs["northwind"], "officer_of", "observed", 0.93, "corporate-officers-2025", col_corp)
+    rel(people["elena"], orgs["northwind"], "officer_of", "observed", 0.93, "corporate-officers-2025", col_corp)
+    rel(orgs["caspian"], orgs["aria"], "partners_with", "inferred", 0.71, "open-news-mentions-q4-2025", col_news)
+    rel(people["mohammad"], people["yusuf"], "associated_with", "inferred", 0.62, "shared Caspian Analytics", col_corp)
+    rel(people["sara"], people["ali"], "associated_with", "derived", 0.7, "shared Nour Tech", col_corp)
 
     # Investigation
     case = Investigation(
@@ -778,6 +1023,7 @@ def seed(db: Session) -> None:
         owner_id=analyst.id,
         team_id=team.id,
         tags=["demo", "corporate", "ownership"],
+        collection_ids=[str(col_academic.id), str(col_corp.id), str(col_news.id)],
     )
     db.add(case)
     db.flush()

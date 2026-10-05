@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { pct } from "@/lib/format";
@@ -18,11 +18,14 @@ const STEPS = [
   "stepImport",
 ];
 
-export default function ImportWizard() {
+function ImportWizardInner() {
   const { t } = useI18n();
   const router = useRouter();
+  const params = useSearchParams();
   const [step, setStep] = useState(0);
   const [job, setJob] = useState<any>(null);
+  const [collections, setCollections] = useState<any[]>([]);
+  const [collectionId, setCollectionId] = useState(params.get("collection") || "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [meta, setMeta] = useState({
@@ -43,6 +46,10 @@ export default function ImportWizard() {
   const [profile, setProfile] = useState<any>(null);
 
   const state = job?.wizard_state || {};
+
+  useEffect(() => {
+    api("/collections?page_size=100").then((r) => setCollections(r.items || [])).catch(() => {});
+  }, []);
 
   async function upload(file: File) {
     setBusy(true);
@@ -70,8 +77,12 @@ export default function ImportWizard() {
           ...meta,
           languages: meta.languages.split(",").map((s) => s.trim()).filter(Boolean),
           tags: meta.tags.split(",").map((s) => s.trim()).filter(Boolean),
+          collection_id: collectionId || undefined,
         }),
       });
+      if (collectionId) {
+        await api(`/imports/${job.id}/collection`, { method: "POST", body: JSON.stringify({ collection_id: collectionId }) });
+      }
       setJob(j);
       const det = await api(`/imports/${job.id}/detect-schema`, { method: "POST" });
       setJob(det);
@@ -172,6 +183,16 @@ export default function ImportWizard() {
 
       {step === 1 && (
         <div className="panel panel-b" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label className="label">{t("collections.selectCollection")} *</label>
+            <select className="select" value={collectionId} onChange={(e) => setCollectionId(e.target.value)}>
+              <option value="">—</option>
+              {collections.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            <div className="faint" style={{ marginTop: 4 }}>{t("collections.required")} <a className="linkish" href="/collections/new">{t("collections.orCreate")}</a></div>
+          </div>
           {(["name", "description", "source", "source_description", "geographic_scope", "notes"] as const).map((k) => (
             <div key={k} style={{ gridColumn: k === "description" || k === "notes" ? "1 / -1" : undefined }}>
               <label className="label">{t(k === "name" ? "datasets.name" : k === "source" ? "source" : k)}</label>
@@ -203,7 +224,7 @@ export default function ImportWizard() {
             <input className="input" value={meta.tags} onChange={(e) => setMeta({ ...meta, tags: e.target.value })} />
           </div>
           <div style={{ gridColumn: "1 / -1" }}>
-            <button className="btn btn-primary" disabled={!meta.name || busy} onClick={saveMeta}>{t("next")}</button>
+            <button className="btn btn-primary" disabled={!meta.name || !collectionId || busy} onClick={saveMeta}>{t("next")}</button>
           </div>
         </div>
       )}
@@ -336,5 +357,13 @@ export default function ImportWizard() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function ImportWizard() {
+  return (
+    <Suspense fallback={<div className="muted">…</div>}>
+      <ImportWizardInner />
+    </Suspense>
   );
 }

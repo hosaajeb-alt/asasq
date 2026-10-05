@@ -10,10 +10,12 @@ from app.api.deps import get_current_user
 from app.application.audit import write_audit
 from app.application.serializers import entity_out
 from app.domain.models import (
+    Collection,
     Dataset,
     Entity,
     EntityAlias,
     EntityAttribute,
+    EntityCollectionLink,
     EntityRecordLink,
     Record,
     Relationship,
@@ -35,6 +37,7 @@ def list_entities(
     q: Optional[str] = None,
     entity_type: Optional[str] = None,
     status: Optional[str] = "active",
+    collection_id: Optional[UUID] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -45,6 +48,9 @@ def list_entities(
         query = query.filter(Entity.status == status)
     if entity_type:
         query = query.filter(Entity.entity_type == entity_type)
+    if collection_id:
+        linked = db.query(EntityCollectionLink.entity_id).filter(EntityCollectionLink.collection_id == collection_id)
+        query = query.filter(Entity.id.in_(linked))
     if q:
         like = f"%{q}%"
         alias_ids = db.query(EntityAlias.entity_id).filter(EntityAlias.alias.ilike(like))
@@ -78,6 +84,7 @@ def get_entity(entity_id: UUID, db: Session = Depends(get_db), user: User = Depe
                 "record_id": str(link.record_id),
                 "dataset_id": str(link.dataset_id),
                 "dataset_name": ds.name if ds else "",
+                "collection_id": str(link.collection_id) if link.collection_id else None,
                 "confidence": link.match_confidence,
                 "explain": link.explain_json,
                 "raw": rec.raw_payload if rec else {},
@@ -133,6 +140,15 @@ def get_entity(entity_id: UUID, db: Session = Depends(get_db), user: User = Depe
             "sources": sources,
             "relationships": [rel_out(r, "out") for r in rels_out] + [rel_out(r, "in") for r in rels_in],
             "provenance": provenance,
+            "collections": [
+                {
+                    "id": str(cl.collection_id),
+                    "name": (db.get(Collection, cl.collection_id).name if db.get(Collection, cl.collection_id) else ""),
+                    "origin": cl.origin,
+                    "confidence": cl.confidence,
+                }
+                for cl in db.query(EntityCollectionLink).filter(EntityCollectionLink.entity_id == e.id).all()
+            ],
         },
     )
 
@@ -140,14 +156,17 @@ def get_entity(entity_id: UUID, db: Session = Depends(get_db), user: User = Depe
 @router.post("/resolve")
 def resolve(
     dataset_id: Optional[UUID] = None,
+    collection_id: Optional[UUID] = None,
     min_confidence: float = 0.55,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Run blocking ER over records (optionally scoped to a dataset). Propose only."""
+    """Run blocking ER over records (optionally scoped to a collection/dataset). Propose only."""
     from app.domain.models import RecordValue
 
     q = db.query(Record)
+    if collection_id:
+        q = q.filter(Record.collection_id == collection_id)
     if dataset_id:
         q = q.filter(Record.dataset_id == dataset_id)
     records = q.limit(5000).all()

@@ -21,10 +21,19 @@ function SearchInner() {
   const [datasetId, setDatasetId] = useState("");
   const [cases, setCases] = useState<any[]>([]);
   const [caseId, setCaseId] = useState("");
+  const [collections, setCollections] = useState<any[]>([]);
+  const [collectionIds, setCollectionIds] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    const saved = localStorage.getItem("nexus.collectionScope");
+    return saved ? JSON.parse(saved) : [];
+  });
 
   useEffect(() => {
     api("/datasets?page_size=100").then((r) => setDatasets(r.items || [])).catch(() => {});
     api("/investigations?page_size=50").then((r) => setCases(r.items || [])).catch(() => {});
+    api("/collections?page_size=100").then((r) => setCollections(r.items || [])).catch(() => {});
+    const fromUrl = params.get("collections");
+    if (fromUrl) setCollectionIds(fromUrl.split(",").filter(Boolean));
   }, []);
 
   async function run(e?: React.FormEvent) {
@@ -40,6 +49,7 @@ function SearchInner() {
           dataset_id: datasetId || null,
           page: 1,
           page_size: 40,
+          scope: { collections: collectionIds.length ? collectionIds : ["*"], datasets: datasetId ? [datasetId] : [] },
         }),
       });
       setData(res);
@@ -81,7 +91,25 @@ function SearchInner() {
             <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("searchPlaceholder")} />
             <button className="btn btn-primary" disabled={busy}><Search size={14} /> {t("search")}</button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
+            <div>
+              <label className="label">{t("collections.scope")}</label>
+              <select
+                className="select"
+                value={collectionIds[0] || ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const next = v ? [v] : [];
+                  setCollectionIds(next);
+                  localStorage.setItem("nexus.collectionScope", JSON.stringify(next));
+                }}
+              >
+                <option value="">{t("collections.allCollections")}</option>
+                {collections.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
             <div>
               <label className="label">{t("search.mode")}</label>
               <select className="select" value={mode} onChange={(e) => setMode(e.target.value)}>
@@ -167,6 +195,9 @@ function SearchInner() {
                     </div>
                   </td>
                   <td>
+                    {it.collection_id && (
+                      <div><Link className="linkish" href={`/collections/${it.collection_id}`}>{it.collection_name}</Link></div>
+                    )}
                     <Link className="linkish" href={`/datasets/${it.dataset_id}`}>{it.dataset_name}</Link>
                     <div className="faint">{it.field_name}</div>
                   </td>

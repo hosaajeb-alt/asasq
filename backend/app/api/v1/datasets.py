@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.application.audit import write_audit
 from app.application.serializers import dataset_out
-from app.domain.models import Dataset, DatasetField, DatasetVersion, Record, User
+from app.domain.models import Collection, Dataset, DatasetField, DatasetVersion, Record, User
 from app.infrastructure.db import get_db
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -39,6 +39,7 @@ def _slug(name: str) -> str:
 def list_datasets(
     q: Optional[str] = None,
     category: Optional[str] = None,
+    collection_id: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -56,9 +57,16 @@ def list_datasets(
         )
     if category:
         query = query.filter(Dataset.category == category)
+    if collection_id:
+        query = query.filter(Dataset.collection_id == collection_id)
     total = query.count()
     rows = query.order_by(Dataset.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    return {"total": total, "page": page, "page_size": page_size, "items": [dataset_out(d) for d in rows]}
+    col_ids = {d.collection_id for d in rows if d.collection_id}
+    names = (
+        {c.id: c.name for c in db.query(Collection).filter(Collection.id.in_(col_ids)).all()} if col_ids else {}
+    )
+    items = [dataset_out(d, {"collection_name": names.get(d.collection_id)}) for d in rows]
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
 @router.post("")

@@ -11,12 +11,14 @@ from sqlalchemy.orm import Session
 
 from app.application.parsers import iter_rows
 from app.domain.models import (
+    Collection,
     Dataset,
     DatasetField,
     DatasetVersion,
     Entity,
     EntityAlias,
     EntityAttribute,
+    EntityCollectionLink,
     EntityRecordLink,
     Record,
     RecordValue,
@@ -41,8 +43,11 @@ def commit_import(
     schema_fields: list[dict[str, Any]],
     language_hint: str | None,
     entity_mappings: dict[str, str] | None = None,
+    collection_id: UUID | None = None,
+    normalization_policy: dict | None = None,
 ) -> dict[str, Any]:
     engine = NormalizationEngine()
+    cid = collection_id or getattr(dataset, "collection_id", None)
     entity_mappings = entity_mappings or {}
     seen_hash: dict[str, UUID] = {}
     # name-type -> entity
@@ -63,11 +68,15 @@ def commit_import(
             raw_payload=row,
             language=language_hint or "",
             content_hash=h,
+            collection_id=cid,
         )
         if h in seen_hash:
             rec.duplicate_of = seen_hash[h]
             rec.duplicate_confidence = 1.0
             rec.duplicate_reason = "exact"
+            rec.duplicate_method = "content_hash"
+            rec.duplicate_scope = "dataset"
+            rec.duplicate_review_status = "recorded"
             duplicates += 1
         else:
             seen_hash[h] = rec.id
@@ -82,7 +91,11 @@ def commit_import(
         for name, raw in row.items():
             meta = field_by_name.get(name) or {"semantic_type": "FreeText", "name": name}
             st = meta.get("semantic_type") or "FreeText"
-            env = engine.normalize(raw, st, language_hint)
+            hint = language_hint
+            if not hint and normalization_policy:
+                langs = normalization_policy.get("languages") or []
+                hint = langs[0] if langs else None
+            env = engine.normalize(raw, st, hint)
             if raw not in (None, "") and not env.is_valid:
                 invalid += 1
             keys = engine.block_keys(env, st)
@@ -90,6 +103,7 @@ def commit_import(
                 RecordValue(
                     record_id=rec.id,
                     dataset_id=dataset.id,
+                    collection_id=cid,
                     field_name=name,
                     semantic_type=st,
                     original_value=env.original_value,
@@ -107,6 +121,7 @@ def commit_import(
                 db.add(
                     SearchDoc(
                         dataset_id=dataset.id,
+                        collection_id=cid,
                         record_id=rec.id,
                         semantic_type=st,
                         field_name=name,
@@ -161,10 +176,27 @@ def commit_import(
                     entity_id=ent.id,
                     record_id=rec.id,
                     dataset_id=dataset.id,
+                    collection_id=cid,
                     match_confidence=1.0,
                     explain_json={"reason": "same canonical name on ingest (not identity proof)"},
                 )
             )
+            if cid:
+                existing_link = (
+                    db.query(EntityCollectionLink)
+                    .filter(EntityCollectionLink.entity_id == ent.id, EntityCollectionLink.collection_id == cid)
+                    .first()
+                )
+                if not existing_link:
+                    db.add(
+                        EntityCollectionLink(
+                            entity_id=ent.id,
+                            collection_id=cid,
+                            dataset_id=dataset.id,
+                            origin="observed",
+                            confidence=1.0,
+                        )
+                    )
             for st, envd in attrs.items():
                 val = envd.get("original_value")
                 if not val:
@@ -178,6 +210,7 @@ def commit_import(
                         origin="observed",
                         record_id=rec.id,
                         dataset_id=dataset.id,
+                        collection_id=cid,
                     )
                 )
             db.query(SearchDoc).filter(SearchDoc.record_id == rec.id).update(
@@ -192,6 +225,12 @@ def commit_import(
     dataset.processing_status = "ready"
     dataset.imported_at = now
     version.record_count = processed
+    if cid:
+        col = db.get(Collection, cid)
+        if col:
+            col.record_count = (col.record_count or 0) + processed
+            col.last_import_at = now
+            col.dataset_count = (col.dataset_count or 0)
     db.flush()
     return {
         "records_processed": processed,

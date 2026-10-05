@@ -18,6 +18,9 @@ def write_audit(
     ip: str = "",
     user_agent: str = "",
     payload: Optional[dict[str, Any]] = None,
+    collection_id: Optional[UUID] = None,
+    dataset_id: Optional[UUID] = None,
+    request_id: str = "",
 ) -> None:
     db.add(
         AuditLog(
@@ -28,5 +31,9 @@ def write_audit(
             ip=ip or "",
             user_agent=(user_agent or "")[:400],
             payload=payload or {},
+            collection_id=collection_id,
+            dataset_id=dataset_id,
+            request_id=request_id,
+            result_summary=str((payload or {}).get("hits", ""))[:200],
         )
     )

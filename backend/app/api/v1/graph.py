@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.collections.scope import visible_collection_ids
 from app.domain.models import Entity, Relationship, User
 from app.infrastructure.db import get_db
 
@@ -14,6 +15,7 @@ router = APIRouter(prefix="/graph", tags=["graph"])
 def neighborhood(
     entity_id: UUID,
     depth: int = Query(1, ge=1, le=3),
+    collection_id: str | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -26,11 +28,12 @@ def neighborhood(
     frontier = {root.id}
     for _ in range(depth):
         nxt = set()
-        rels = (
-            db.query(Relationship)
-            .filter((Relationship.from_entity_id.in_(frontier)) | (Relationship.to_entity_id.in_(frontier)))
-            .all()
+        rq = db.query(Relationship).filter(
+            (Relationship.from_entity_id.in_(frontier)) | (Relationship.to_entity_id.in_(frontier))
         )
+        if collection_id:
+            rq = rq.filter(Relationship.source_collection_id == collection_id)
+        rels = rq.all()
         for r in rels:
             edges.append(r)
             for eid in (r.from_entity_id, r.to_entity_id):
@@ -59,6 +62,8 @@ def neighborhood(
                 "origin": r.origin,
                 "confidence": r.confidence,
                 "source": r.source,
+                "source_collection_id": str(r.source_collection_id) if r.source_collection_id else None,
+                "derivation_method": r.derivation_method,
             }
         )
     return {
@@ -78,8 +83,19 @@ def neighborhood(
 
 
 @router.get("")
-def overview(limit: int = 80, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    rels = db.query(Relationship).limit(limit * 2).all()
+def overview(
+    limit: int = 80,
+    collection_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    allowed = visible_collection_ids(db, user, "view")
+    q = db.query(Relationship)
+    if collection_id:
+        q = q.filter(Relationship.source_collection_id == collection_id)
+    elif allowed:
+        q = q.filter((Relationship.source_collection_id.in_(allowed)) | (Relationship.source_collection_id.is_(None)))
+    rels = q.limit(limit * 2).all()
     ids = set()
     for r in rels:
         ids.add(r.from_entity_id)
@@ -107,6 +123,8 @@ def overview(limit: int = 80, db: Session = Depends(get_db), user: User = Depend
                 "origin": r.origin,
                 "confidence": r.confidence,
                 "source": r.source,
+                "source_collection_id": str(r.source_collection_id) if r.source_collection_id else None,
+                "derivation_method": r.derivation_method,
             }
             for r in rels
             if r.from_entity_id in ids and r.to_entity_id in ids
