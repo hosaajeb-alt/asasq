@@ -1,0 +1,15 @@
+{
+  "title": "Search",
+  "subtitle": "Central investigation surface. Queries expand across original, normalized, transliterated and phonetic forms.",
+  "mode": "Strictness",
+  "hits": "Hits",
+  "expanded": "Expanded query",
+  "result": "Result",
+  "add": "Pin to case",
+  "emptyHint": "Try محمّد رضایی, Mohammad Rezaee, or m.rezaei@aria-research.example",
+  "ranking": "Ranking weights",
+  "matchExact": "Exact",
+  "matchNorm": "Normalized",
+  "matchTr": "Transliteration",
+  "matchPh": "Phonetic"
+}
