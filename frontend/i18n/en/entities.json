@@ -1,0 +1,10 @@
+{
+  "title": "Entities",
+  "subtitle": "Canonical objects supported by records. Linking is probabilistic and explainable.",
+  "profile": "Entity profile",
+  "recordSupport": "Supporting records",
+  "related": "Related entities",
+  "runEr": "Run entity resolution",
+  "proposals": "Proposed matches",
+  "mergeWarn": "Merging is reversible and audited. Name equality never auto-merges."
+}

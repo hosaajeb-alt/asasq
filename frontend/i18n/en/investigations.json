@@ -1,0 +1,9 @@
+{
+  "title": "Investigations",
+  "subtitle": "Cases with entities, records, evidence, notes, timeline and saved searches.",
+  "openCase": "Open case",
+  "newCase": "New investigation",
+  "workspace": "Case workspace",
+  "pinned": "Pinned items",
+  "noItems": "Pin search hits or entities into this case."
+}
